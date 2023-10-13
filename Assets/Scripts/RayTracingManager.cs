@@ -11,6 +11,7 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField] bool useShaderInSceneView;
     
     private Material _rayTracingMaterial;
+    private Mesh[] meshes;
     private Triangle[] triangles;
     
     private void OnRenderImage(RenderTexture source, RenderTexture target)
@@ -35,11 +36,23 @@ public class RayTracingManager : MonoBehaviour
         
         _rayTracingMaterial.SetVector("ViewParams", new Vector3(clipPlaneWidth, clipPlaneHeight, cam.nearClipPlane));
         _rayTracingMaterial.SetMatrix("CameraRotation", Matrix4x4.Rotate(rotation));
+        _rayTracingMaterial.SetInteger("FrameCount", Time.frameCount);
     }
 
     void SendParams()
     {
         _rayTracingMaterial.SetInteger("MaxBounces", maxBounces);
+        
         //_rayTracingMaterial.SetBuffer("Triangles", );
+    }
+
+    void GetMeshesByTag(string tag)
+    {
+        GameObject[] renderObjects = GameObject.FindGameObjectsWithTag(tag);
+
+        foreach (var renderObject in renderObjects)
+        {
+            
+        }
     }
 }

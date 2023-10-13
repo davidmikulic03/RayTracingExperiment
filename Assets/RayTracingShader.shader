@@ -138,10 +138,6 @@ Shader"RayTracingShader"
                 
                 return true; 
             }
-
-            StructuredBuffer<Triangle> Triangles;
-            StructuredBuffer<MeshInfo> AllMeshInfo;
-            int NumMeshes;
             
             HitInfo RayTriangle(Ray ray, Triangle tri)
             {
@@ -194,6 +190,10 @@ Shader"RayTracingShader"
                 return hitInfo;
             }
 
+            StructuredBuffer<Triangle> Triangles;
+            StructuredBuffer<MeshInfo> AllMeshInfo;
+            int NumMeshes;
+
             HitInfo RayCollision(Ray ray)
             {
                 HitInfo closestHit = (HitInfo)0;
@@ -217,10 +217,7 @@ Shader"RayTracingShader"
                             closestHit.material = meshInfo.material;
                         }
                     }
-
-                    return closestHit;
                 }
-
                 return closestHit;
             }
 
@@ -231,13 +228,15 @@ Shader"RayTracingShader"
                     
                 }
             }*/
-            
+
+            uint FrameCount;
+
             float4 frag (v2f i) : SV_Target
             {
                 uint2 numPixels = _ScreenParams.xy;
                 uint2 pixelCoord = i.uv * numPixels;
                 uint pixelIndex = pixelCoord.x + pixelCoord.y * numPixels.x;
-                uint rngState = pixelIndex;
+                uint rngState = pixelIndex + FrameCount * 16389147;
                 
                 float3 localViewPoint = float3(i.uv - 0.5, 1) * ViewParams;
                 float3 viewPoint = mul(CameraRotation, localViewPoint);
@@ -258,8 +257,8 @@ Shader"RayTracingShader"
 
                 float3 boundsMin = float3(-1, -1, -1);
                 float3 boundsMax = float3(1, 1, 1);
-
                 return RayBoundingBox(ray, boundsMin, boundsMax);
+                return float4(RayBoundingBox(ray, boundsMin, boundsMax) * RandomDirection(rngState), 1);
                 return RayTriangle(ray, tri).didHit;
                 return float4(RaySphere(ray, 0, 1).normal, 1);
             }
