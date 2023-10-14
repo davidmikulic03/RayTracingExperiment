@@ -10,7 +10,7 @@ Shader"RayTracingShader"
         {
             CGPROGRAM
 // Upgrade NOTE: excluded shader from OpenGL ES 2.0 because it uses non-square matrices
-#pragma exclude_renderers gles
+            #pragma exclude_renderers gles
             #pragma vertex vert
             #pragma fragment frag
             
@@ -91,17 +91,19 @@ Shader"RayTracingShader"
                 float n1, n2, n3;
             };
 
-            struct MeshInfo
+            struct MeshObject
             {
-                uint firstTriangleIndex;
-                uint numTriangles;
-                float3 boundsMin;
-                float3 boundsMax;
-                RayTracingMaterial material;
+                float4x4 LocalToWorldMatrix;
+                int FirstIndex;
+                int IndexCount;
+                float3 BoundsMin;
+                float3 BoundsMax;
+                //RayTracingMaterial material;
             };
 
             bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax)
             {
+                float3 boundsCenter = (boundsMin + boundsMax) / 2;
                 float3 tmin;
                 float3 tmax;
                 
@@ -131,10 +133,10 @@ Shader"RayTracingShader"
                 if ((tmin.x > tmax.z) || (tmin.z > tmax.x))
                     return false;
 
-                if (tmin.z > tmin.x)
+                /*if (tmin.z > tmin.x)
                     tmin.x = tmin.z;
                 if (tmax.z < tmax.x)
-                    tmax.x = tmax.z;
+                    tmax.x = tmax.z;*/
                 
                 return true; 
             }
@@ -190,24 +192,65 @@ Shader"RayTracingShader"
                 return hitInfo;
             }
 
-            StructuredBuffer<Triangle> Triangles;
-            StructuredBuffer<MeshInfo> AllMeshInfo;
-            int NumMeshes;
+            StructuredBuffer<MeshObject> _meshes;
+            StructuredBuffer<float3> _vertices;
+            StructuredBuffer<float3> _normals;
+            StructuredBuffer<int> _indices;
 
-            HitInfo RayCollision(Ray ray)
+            HitInfo RayMesh(Ray ray, MeshObject mesh)
+            {
+                HitInfo closestHit = (HitInfo)0;
+                closestHit.distance = 1.#INF;
+                
+                if(!RayBoundingBox(ray, mesh.BoundsMin, mesh.BoundsMax))
+                    return closestHit;
+                
+                //closestHit.didHit = true;
+                //return closestHit;
+                
+                uint offset = mesh.FirstIndex;
+                uint count = offset + mesh.IndexCount;
+
+                Triangle tri;
+                for (uint i = offset; i < count; i += 3)
+                {
+                    tri.p1 = (mul(mesh.LocalToWorldMatrix, float4(_vertices[_indices[i]], 1))).xyz;
+                    tri.p2 = (mul(mesh.LocalToWorldMatrix, float4(_vertices[_indices[i + 1]], 1))).xyz;
+                    tri.p3 = (mul(mesh.LocalToWorldMatrix, float4(_vertices[_indices[i + 2]], 1))).xyz;
+
+                    tri.n1 = (mul(mesh.LocalToWorldMatrix, float4(_normals[_indices[i]], 1))).xyz;
+                    tri.n2 = (mul(mesh.LocalToWorldMatrix, float4(_normals[_indices[i + 1]], 1))).xyz;
+                    tri.n3 = (mul(mesh.LocalToWorldMatrix, float4(_normals[_indices[i + 2]], 1))).xyz;
+
+                    HitInfo hitInfo = RayTriangle(ray, tri);
+
+                    if (hitInfo.didHit)
+                    {
+                        if (hitInfo.distance > 0 && hitInfo.distance < closestHit.distance)
+                        {
+                            closestHit.distance = hitInfo.distance;
+                            closestHit.hitPoint = ray.origin + hitInfo.distance * ray.direction;
+                            closestHit.normal = hitInfo.normal;
+                        }
+                    }
+                }
+                return closestHit;
+            }
+
+            /*HitInfo RayCollision(Ray ray)
             {
                 HitInfo closestHit = (HitInfo)0;
                 closestHit.distance = 1.#INF;
 
-                for(int meshIndex = 0; meshIndex < NumMeshes; meshIndex++)
+                for(int meshIndex = 0; meshIndex < 1; meshIndex++)
                 {
-                    MeshInfo meshInfo = AllMeshInfo[meshIndex];
-                    if(!RayBoundingBox(ray, meshInfo.boundsMin, meshInfo.boundsMax))
+                    Mesh mesh = _Meshes[meshIndex];
+                    if(!RayBoundingBox(ray, mesh.boundsMin, mesh.boundsMax))
                         continue;
 
-                    for(uint i = 0; i < meshInfo.numTriangles; i++)
+                    for(uint i = 0; i < mesh.indexCount; i++)
                     {
-                        int triIndex = meshInfo.firstTriangleIndex + i;
+                        int triIndex = mesh.firstIndex + i;
                         Triangle tri = Triangles[triIndex];
                         HitInfo hitInfo = RayTriangle(ray, tri);
                         
@@ -219,15 +262,24 @@ Shader"RayTracingShader"
                     }
                 }
                 return closestHit;
-            }
-
-            /*float3 Trace(Ray ray, inout uint rngState)
-            {
-                for(int i = 0; i <= MaxBounces; i++)
-                {
-                    
-                }
             }*/
+
+            HitInfo RayAll(Ray ray)
+            {
+                HitInfo closestHit = (HitInfo)0;
+                closestHit.distance = 1.#INF;
+                uint count, stride;
+                _meshes.GetDimensions(count, stride);
+                
+                for (uint i = 0; i < count; i++)
+                {
+                    HitInfo hitInfo = RayMesh(ray, _meshes[i]);
+                    if(hitInfo.distance < closestHit.distance)
+                        closestHit = hitInfo;
+                }
+                
+                return closestHit;
+            }
 
             uint FrameCount;
 
@@ -245,22 +297,9 @@ Shader"RayTracingShader"
                 ray.origin = _WorldSpaceCameraPos;
                 ray.direction = normalize(viewPoint);
 
-                float3 r = ray.direction;
+                //return RayBoundingBox(ray, float3(-0.5,-0.5,-0.5),float3(0.5,0.5,0.5));
 
-                Triangle tri;
-                tri.p1 = float3(10, 0, 10);
-                tri.p2 = float3(10, 0, -10);
-                tri.p3 = float3(-10, 0, 0);
-                tri.n1 = float3(0, 1, 0);
-                tri.n2 = float3(0, 1, 0);
-                tri.n3 = float3(0, 1, 0);
-
-                float3 boundsMin = float3(-1, -1, -1);
-                float3 boundsMax = float3(1, 1, 1);
-                return RayBoundingBox(ray, boundsMin, boundsMax);
-                return float4(RayBoundingBox(ray, boundsMin, boundsMax) * RandomDirection(rngState), 1);
-                return RayTriangle(ray, tri).didHit;
-                return float4(RaySphere(ray, 0, 1).normal, 1);
+                return RayAll(ray).didHit;
             }
             ENDCG
         }

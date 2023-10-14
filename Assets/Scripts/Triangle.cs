@@ -5,7 +5,7 @@ struct Triangle
     public Vector3 p1, p2, p3;
     public Vector3 n1, n2, n3;
 
-    public static Triangle[] TrianglesFromMesh (Mesh mesh, Transform transform)
+    public static Triangle[] FromMesh (Mesh mesh, Transform transform)
     {
         int[] triIndices = mesh.triangles;
         Vector3[] vertices = mesh.vertices;

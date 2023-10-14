@@ -1,0 +1,269 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+static const float PI = 3.14159265f;
+static const float epsilon = 1E-6;
+RWTexture2D<float4> Result;
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+uint _MaxBounces;
+uint _FrameCount;
+
+float RandomValue(inout uint rngState)
+{
+    rngState = rngState * 747796405 + 2891336453;
+    uint result = ((rngState >> ((rngState >> 28) + 4)) ^ rngState) * 277803737;
+    result = (result >> 22) ^ result;
+    return result / 4294967295.0;
+}
+
+float RandomValueNormalDistribution(inout uint rngState)
+{
+    float theta = 2 * 3.14159265359 * RandomValue(rngState);
+    float rho = sqrt(-2 * log(RandomValue(rngState)));
+    return rho * cos(theta);
+}
+
+float3 RandomDirection(inout uint rngState)
+{
+    float x = RandomValueNormalDistribution(rngState);
+    float y = RandomValueNormalDistribution(rngState);
+    float z = RandomValueNormalDistribution(rngState);
+    return normalize(float3(x,y,z));
+}
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+Ray CameraRay(float2 uv)
+{
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+    
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    // Transform the direction from camera to world space and normalize
+    direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+    direction = normalize(direction);
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+struct HitInfo
+{
+    bool didHit;
+    float3 hitPoint, normal;
+    float distance;
+    //RayTracingMaterial material;
+};
+
+struct Triangle
+{
+    float3 p1, p2, p3;
+    float3 n1, n2, n3;
+};
+
+struct MeshObject
+{
+    float4x4 localToWorldMatrix;
+    int firstIndex;
+    int indexCount;
+    //RayTracingMaterial material;
+};
+
+StructuredBuffer<MeshObject> _meshes;
+StructuredBuffer<float3> _vertices;
+StructuredBuffer<float3> _normals;
+StructuredBuffer<int> _indices;
+
+bool RayBoundingBox(Ray ray, float3 boundsMin, float3 boundsMax)
+{
+    //float3 boundsCenter = (boundsMin + boundsMax) / 2;
+    float3 tmin;
+    float3 tmax;
+    
+    float3 invDir = 1 / ray.direction;
+    int3 sign;
+    sign.x = invDir.x >= 0 ? 0 : 1;
+    sign.y = invDir.y >= 0 ? 0 : 1;
+    sign.z = invDir.z >= 0 ? 0 : 1;
+
+    float2x3 bounds = float2x3(boundsMin, boundsMax);
+    tmin.x = (bounds[sign.x].x - ray.origin.x) * invDir.x;
+    tmax.x = (bounds[1 - sign.x].x - ray.origin.x) * invDir.x;
+    tmin.y = (bounds[sign.y].y - ray.origin.y) * invDir.y;
+    tmax.y = (bounds[1 - sign.y].y - ray.origin.y) * invDir.y;
+
+    if ((tmin.x > tmax.y) || (tmin.y > tmax.x))
+        return false;
+    
+    if (tmin.y > tmin.x)
+        tmin.x = tmin.y;
+    if (tmax.y < tmax.x)
+        tmax.x = tmax.y;
+
+    tmin.z = (bounds[sign.z].z - ray.origin.z) * invDir.z;
+    tmax.z = (bounds[1 - sign.z].z - ray.origin.z) * invDir.z;
+
+    if ((tmin.x > tmax.z) || (tmin.z > tmax.x))
+        return false;
+
+    /*if (tmin.z > tmin.x)
+        tmin.x = tmin.z;
+    if (tmax.z < tmax.x)
+        tmax.x = tmax.z;*/
+    
+    return true; 
+}
+
+HitInfo RayTriangle(Ray ray, Triangle tri)
+{
+    HitInfo hitInfo = (HitInfo)0;
+    hitInfo.distance = 1.#INF;
+    const float epsilon = 1E-6;
+    float3 edge1, edge2, h, s, q;
+    float a, f, u, v;
+    
+    edge1 = tri.p2 - tri.p1;
+    edge2 = tri.p3 - tri.p1;
+
+    h = cross(ray.direction, edge2);
+    a = dot(edge1, h);
+
+    if(a > -epsilon && a < epsilon)
+        return hitInfo;
+
+    f = 1.0 / a;
+    s = ray.origin - tri.p1;
+    u = f * dot(s, h);
+
+    if(u < 0 || u > 1)
+        return hitInfo;
+
+    q = cross(s, edge1);
+    v = f * dot(ray.direction, q);
+
+    if(v < 0 || u + v > 1)
+        return hitInfo;
+
+    float dst = f * dot(edge2, q);
+
+    if(dst > epsilon)
+    {
+        hitInfo.didHit = true;
+        hitInfo.hitPoint = ray.origin + ray.direction * dst;
+        hitInfo.distance = dst;
+    }
+    return hitInfo;
+}
+
+HitInfo RaySphere(Ray ray, float3 sphereCenter, float sphereRadius)
+{
+    HitInfo hitInfo = (HitInfo)0;
+    float3 offsetRayOrigin = ray.origin - sphereCenter;
+    float a = 1;
+    float b = 2 * dot(offsetRayOrigin, ray.direction);
+    float c = dot(offsetRayOrigin, offsetRayOrigin) - sphereRadius * sphereRadius;
+
+    float discriminant = b * b - 4 * a * c;
+
+    if(discriminant >= 0)
+    {
+        float dst = (-b - sqrt(discriminant)) / (2 * a);
+
+        if(dst >= 0)
+        {
+            hitInfo.didHit = true;
+            hitInfo.distance = dst;
+            hitInfo.hitPoint = ray.origin + ray.direction * dst;
+            hitInfo.normal = normalize(hitInfo.hitPoint - sphereCenter);
+        }
+    }
+
+    return hitInfo;
+}
+
+HitInfo RayMesh(Ray ray, MeshObject mesh)
+{
+    HitInfo closestHit = (HitInfo)0;
+    closestHit.distance = 1.#INF;
+    
+    /*if(!RayBoundingBox(ray, mesh.boundsMin, mesh.boundsMax))
+        return closestHit;
+    else
+    {
+        closestHit.didHit = true;
+        return closestHit;
+    }*/
+    
+    uint offset = mesh.firstIndex;
+    uint count = offset + mesh.indexCount;
+
+    Triangle tri;
+    for (uint i = offset; i < count; i += 3)
+    {
+        tri.p1 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i]], 1)).xyz;
+        tri.p2 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i + 1]], 1)).xyz;
+        tri.p3 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i + 2]], 1)).xyz;
+
+        tri.n1 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i]], 1)).xyz;
+        tri.n2 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i + 1]], 1)).xyz;
+        tri.n3 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i + 2]], 1)).xyz;
+
+        HitInfo hitInfo = RayTriangle(ray, tri);
+
+        if (hitInfo.didHit)
+        {
+            if (hitInfo.distance > epsilon && hitInfo.distance < closestHit.distance)
+            {
+                closestHit.distance = hitInfo.distance;
+                closestHit.hitPoint = ray.origin + hitInfo.distance * ray.direction;
+                closestHit.normal = hitInfo.normal;
+            }
+        }
+    }
+    return closestHit;
+}
+
+HitInfo RayAll(Ray ray)
+{
+    HitInfo closestHit = (HitInfo)0;
+    closestHit.distance = 1.#INF;
+    uint count, stride;
+    _meshes.GetDimensions(count, stride);
+    
+    for (uint i = 0; i < count; i++)
+    {
+        HitInfo hitInfo = RayMesh(ray, _meshes[i]);
+        
+        if(hitInfo.distance < closestHit.distance)
+            closestHit = hitInfo;
+    }
+    
+    return closestHit;
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    float2 uv = float2((id.xy + 0.5) / float2(width, height) * 2 - 1);
+
+    Ray ray = CameraRay(uv);
+    //Result[id.xy] = RayAll(ray).didHit;
+
+    int index = clamp(id.x, 0, width);
+    float3 position = (mul(_meshes[index].localToWorldMatrix, float4(_vertices[index], 1)).xyz);
+    
+    Result[id.xy] = float4(position, 1);
+    
+    /*Result[id.xy] =
+        RayTriangle(ray, tri).didHit ||
+        RaySphere(ray, tri.p1, 0.5).didHit ||
+        RaySphere(ray, tri.p2, 0.5).didHit ||
+        RaySphere(ray, tri.p3, 0.5).didHit;*/
+}
