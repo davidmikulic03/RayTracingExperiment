@@ -2,11 +2,12 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [Serializable]
-public class RayTracingMaterial
+public struct RayTracingMaterial
 {
-    public Color diffuseColor = Color.white;
-    public Color emissionColor;
-    public float emissionStrength;
+    public Color diffuseColor;
+    public Color emissiveColor;
+    public float emission;
 }
