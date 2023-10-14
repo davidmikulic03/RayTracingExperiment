@@ -10,6 +10,7 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField] ComputeShader rayTracingShader;
     private RenderTexture target;
     [SerializeField] private int maxBounces;
+    [SerializeField] private int samples;
     [SerializeField] bool useShaderInSceneView;
     
     private static List<MeshObject> _meshes = new List<MeshObject>();
@@ -30,7 +31,7 @@ public class RayTracingManager : MonoBehaviour
             Render(destination);
         }
         else
-            Graphics.Blit(source, target);
+            Graphics.Blit(source, destination);
     }
 
     void Render(RenderTexture destination)
@@ -70,6 +71,7 @@ public class RayTracingManager : MonoBehaviour
         rayTracingShader.SetMatrix("_CameraInverseProjection", cam.projectionMatrix.inverse);
         rayTracingShader.SetInt("_FrameCount", Time.frameCount);
         rayTracingShader.SetInt("_MaxBounces", maxBounces);
+        rayTracingShader.SetInt("_Samples", samples);
         
         SetBuffer("_meshes", _meshObjectBuffer);
         SetBuffer("_vertices", _vertexBuffer);
@@ -81,6 +83,7 @@ public class RayTracingManager : MonoBehaviour
     private static List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
     public static void RegisterObject(RayTracingObject obj)
     {
+        obj.index = _rayTracingObjects.Count;
         _rayTracingObjects.Add(obj);
         _meshObjectsNeedRebuilding = true;
     }
@@ -90,12 +93,26 @@ public class RayTracingManager : MonoBehaviour
         _meshObjectsNeedRebuilding = true;
     }
     
+    public static void UpdateObject(RayTracingObject obj)
+    {
+        UnregisterObject(obj);
+        RegisterObject(obj);
+        /*_rayTracingObjects[obj.index] = obj;
+        _meshObjectsNeedRebuilding = true;*/
+    }
+    
     struct MeshObject
     {
-        public Matrix4x4 localToWorldMatrix;
+        public Matrix4x4 localToWorld;
         public int firstIndex;
         public int indexCount;
-        //RTMaterial material;
+
+        public Vector3 boundsMin;
+        public Vector3 boundsMax;
+        
+        public Color diffuseColor;
+        public Color emissiveColor;
+        public float emission;
     }
     
     private void RebuildMeshObjectBuffers()
@@ -122,17 +139,25 @@ public class RayTracingManager : MonoBehaviour
             int firstIndex = _indices.Count;
             var indices = mesh.GetIndices(0);
             _indices.AddRange(indices.Select(index => index + firstVertex));
+
+            Vector3 min = new Vector3();
+            Vector3 max = new Vector3();
             
-            Debug.Log(obj.transform.localToWorldMatrix);
+            obj.GetBounds(ref min, ref max);
             
             _meshes.Add(new MeshObject()
             {
-                localToWorldMatrix = obj.transform.localToWorldMatrix,
+                localToWorld = obj.transform.localToWorldMatrix,
                 firstIndex = firstIndex,
-                indexCount = indices.Length
+                indexCount = indices.Length,
+                boundsMin = min,
+                boundsMax = max,
+                diffuseColor = obj.material.diffuseColor,
+                emissiveColor = obj.material.emissiveColor,
+                emission = obj.material.emission
             });
         }
-        CreateComputeBuffer(ref _meshObjectBuffer, _meshes, 72);
+        CreateComputeBuffer(ref _meshObjectBuffer, _meshes, 132);
         CreateComputeBuffer(ref _vertexBuffer, _vertices, 12);
         CreateComputeBuffer(ref _normalsBuffer, _normals, 12);
         CreateComputeBuffer(ref _indexBuffer, _indices, 4);

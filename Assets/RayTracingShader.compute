@@ -7,6 +7,7 @@ RWTexture2D<float4> Result;
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
 uint _MaxBounces;
+uint _Samples;
 uint _FrameCount;
 
 float RandomValue(inout uint rngState)
@@ -57,7 +58,9 @@ struct HitInfo
     bool didHit;
     float3 hitPoint, normal;
     float distance;
-    //RayTracingMaterial material;
+    
+    float4 diffuse;
+    float4 emission;
 };
 
 struct Triangle
@@ -68,10 +71,15 @@ struct Triangle
 
 struct MeshObject
 {
-    float4x4 localToWorldMatrix;
+    float4x4 localToWorld;
     int firstIndex;
     int indexCount;
-    //RayTracingMaterial material;
+    float3 boundsMin;
+    float3 boundsMax;
+    
+    float4 diffuseColor;
+    float4 emissiveColor;
+    float emission;
 };
 
 StructuredBuffer<MeshObject> _meshes;
@@ -156,6 +164,7 @@ HitInfo RayTriangle(Ray ray, Triangle tri)
         hitInfo.didHit = true;
         hitInfo.hitPoint = ray.origin + ray.direction * dst;
         hitInfo.distance = dst;
+        hitInfo.normal = normalize(cross(tri.p2 - tri.p1, tri.p3 - tri.p1));
     }
     return hitInfo;
 }
@@ -191,13 +200,9 @@ HitInfo RayMesh(Ray ray, MeshObject mesh)
     HitInfo closestHit = (HitInfo)0;
     closestHit.distance = 1.#INF;
     
-    /*if(!RayBoundingBox(ray, mesh.boundsMin, mesh.boundsMax))
+    if(!RayBoundingBox(ray, mesh.boundsMin, mesh.boundsMax))
         return closestHit;
-    else
-    {
-        closestHit.didHit = true;
-        return closestHit;
-    }*/
+    
     
     uint offset = mesh.firstIndex;
     uint count = offset + mesh.indexCount;
@@ -205,13 +210,13 @@ HitInfo RayMesh(Ray ray, MeshObject mesh)
     Triangle tri;
     for (uint i = offset; i < count; i += 3)
     {
-        tri.p1 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i]], 1)).xyz;
-        tri.p2 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i + 1]], 1)).xyz;
-        tri.p3 = mul(mesh.localToWorldMatrix, float4(_vertices[_indices[i + 2]], 1)).xyz;
+        tri.p1 = mul(mesh.localToWorld, float4(_vertices[_indices[i]], 1)).xyz;
+        tri.p2 = mul(mesh.localToWorld, float4(_vertices[_indices[i + 1]], 1)).xyz;
+        tri.p3 = mul(mesh.localToWorld, float4(_vertices[_indices[i + 2]], 1)).xyz;
 
-        tri.n1 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i]], 1)).xyz;
-        tri.n2 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i + 1]], 1)).xyz;
-        tri.n3 = mul(mesh.localToWorldMatrix, float4(_normals[_indices[i + 2]], 1)).xyz;
+        tri.n1 = mul(mesh.localToWorld, float4(_normals[_indices[i]], 1)).xyz;
+        tri.n2 = mul(mesh.localToWorld, float4(_normals[_indices[i + 1]], 1)).xyz;
+        tri.n3 = mul(mesh.localToWorld, float4(_normals[_indices[i + 2]], 1)).xyz;
 
         HitInfo hitInfo = RayTriangle(ray, tri);
 
@@ -219,9 +224,9 @@ HitInfo RayMesh(Ray ray, MeshObject mesh)
         {
             if (hitInfo.distance > epsilon && hitInfo.distance < closestHit.distance)
             {
-                closestHit.distance = hitInfo.distance;
-                closestHit.hitPoint = ray.origin + hitInfo.distance * ray.direction;
-                closestHit.normal = hitInfo.normal;
+                closestHit = hitInfo;
+                closestHit.diffuse = mesh.diffuseColor;
+                closestHit.emission = mesh.emissiveColor * mesh.emission;
             }
         }
     }
@@ -246,6 +251,30 @@ HitInfo RayAll(Ray ray)
     return closestHit;
 }
 
+float3 Trace(Ray ray, inout uint rngState)
+{
+    float3 incomingLight = 0;
+    float3 rayColor = 1;
+    
+    for(uint i = 0; i <= _MaxBounces; i++)
+    {
+        HitInfo hit = RayAll(ray);
+
+        if(hit.didHit)
+        {
+            float3 direction = normalize(hit.normal + RandomDirection(rngState));
+        
+            ray.origin = hit.hitPoint;
+            ray.direction = direction;
+            incomingLight += hit.emission.rgb * rayColor;
+            rayColor = rayColor * hit.diffuse.rgb;
+        }
+        else break;
+    }
+
+    return incomingLight;
+}
+
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
@@ -253,13 +282,20 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     Result.GetDimensions(width, height);
     float2 uv = float2((id.xy + 0.5) / float2(width, height) * 2 - 1);
 
-    Ray ray = CameraRay(uv);
-    //Result[id.xy] = RayAll(ray).didHit;
+    uint2 numPixels = uint2(width, height);
+    uint2 pixelCoord = (uv + 1) * numPixels;
+    uint pixelIndex = pixelCoord.x + pixelCoord.y * numPixels.x;
+    uint rngState = pixelIndex + _FrameCount * 136786125;
 
-    int index = clamp(id.x, 0, width);
-    float3 position = (mul(_meshes[index].localToWorldMatrix, float4(_vertices[index], 1)).xyz);
+    Ray ray = CameraRay(uv);
+
+    float3 totalIncomingLight = 0;
+    for(uint rayIndex = 0; rayIndex < _Samples; rayIndex++)
+    {
+        totalIncomingLight += Trace(ray, rngState);
+    }
     
-    Result[id.xy] = float4(position, 1);
+    Result[id.xy] = float4(totalIncomingLight / _Samples,1);
     
     /*Result[id.xy] =
         RayTriangle(ray, tri).didHit ||
