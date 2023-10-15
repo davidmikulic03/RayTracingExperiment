@@ -38,8 +38,8 @@ public class RayTracingObject : MonoBehaviour
         }
     }
 
-    private void OnValidate()
+    /*private void OnValidate()
     {
         RayTracingManager.UpdateObject(this);
-    }
+    }*/
 }

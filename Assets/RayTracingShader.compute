@@ -9,6 +9,8 @@ float4x4 _CameraInverseProjection;
 uint _MaxBounces;
 uint _Samples;
 uint _FrameCount;
+float _RescaleFactor;
+float2 _PixelOffset;
 
 float RandomValue(inout uint rngState)
 {
@@ -20,7 +22,7 @@ float RandomValue(inout uint rngState)
 
 float RandomValueNormalDistribution(inout uint rngState)
 {
-    float theta = 2 * 3.14159265359 * RandomValue(rngState);
+    float theta = 2 * PI * RandomValue(rngState);
     float rho = sqrt(-2 * log(RandomValue(rngState)));
     return rho * cos(theta);
 }
@@ -280,12 +282,13 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     Result.GetDimensions(width, height);
-    float2 uv = float2((id.xy + 0.5) / float2(width, height) * 2 - 1);
+    float2 uv = float2(((id.xy + _PixelOffset)) / (float2(width, height)) * 2 - 1);
+    //uv = uv - _RescaleFactor + 1;
 
     uint2 numPixels = uint2(width, height);
     uint2 pixelCoord = (uv + 1) * numPixels;
     uint pixelIndex = pixelCoord.x + pixelCoord.y * numPixels.x;
-    uint rngState = pixelIndex + _FrameCount * 136786125;
+    uint rngState = pixelIndex + _FrameCount * 747796405;
 
     Ray ray = CameraRay(uv);
 
@@ -295,11 +298,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         totalIncomingLight += Trace(ray, rngState);
     }
     
-    Result[id.xy] = float4(totalIncomingLight / _Samples,1);
-    
-    /*Result[id.xy] =
-        RayTriangle(ray, tri).didHit ||
-        RaySphere(ray, tri.p1, 0.5).didHit ||
-        RaySphere(ray, tri.p2, 0.5).didHit ||
-        RaySphere(ray, tri.p3, 0.5).didHit;*/
+    Result[id.xy] = float4(totalIncomingLight / _Samples, 1);
+    //Result[id.xy] = float4(RayAll(ray).hitPoint, 1);
 }

@@ -1,16 +1,21 @@
-using System;
+
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [ExecuteAlways, ImageEffectAllowedInSceneView]
 public class RayTracingManager : MonoBehaviour
 {
     [SerializeField] ComputeShader rayTracingShader;
+    [Range(0.000001f, 1f)]
+    [SerializeField] private float rescaleFactor;
     private RenderTexture target;
     [SerializeField] private int maxBounces;
     [SerializeField] private int samples;
+    private uint currentSample = 0;
+    private Material addMaterial;
     [SerializeField] bool useShaderInSceneView;
     
     private static List<MeshObject> _meshes = new List<MeshObject>();
@@ -22,6 +27,20 @@ public class RayTracingManager : MonoBehaviour
     private ComputeBuffer _normalsBuffer;
     private ComputeBuffer _indexBuffer;
     
+    private void Update()
+    {
+        if (Camera.current && Camera.current.transform.hasChanged)
+        {
+            currentSample = 0;
+            transform.hasChanged = false;
+        }
+    }
+
+    private void OnValidate()
+    {
+        currentSample = 0;
+    }
+
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
         if (useShaderInSceneView || Camera.current.name != "SceneCamera")
@@ -31,7 +50,10 @@ public class RayTracingManager : MonoBehaviour
             Render(destination);
         }
         else
+        {
+            _meshObjectsNeedRebuilding = true;
             Graphics.Blit(source, destination);
+        }
     }
 
     void Render(RenderTexture destination)
@@ -40,22 +62,36 @@ public class RayTracingManager : MonoBehaviour
         
         rayTracingShader.SetTexture(0, "Result", target);
         
-        int threadGroupsX = Mathf.CeilToInt(Screen.width / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(Screen.height / 8.0f);
+        uint kernelX, kernelY, kernelZ;
+        rayTracingShader.GetKernelThreadGroupSizes(0, out kernelX, out kernelY, out kernelZ);
+        
+        int threadGroupsX = Mathf.CeilToInt(Screen.width / (float)kernelX);
+        int threadGroupsY = Mathf.CeilToInt(Screen.height / (float)kernelY);
         rayTracingShader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
         
-        Graphics.Blit(target, destination);
+        if (addMaterial == null)
+            addMaterial = new Material(Shader.Find("Hidden/AddShader"));
+        addMaterial.SetFloat("_CurrentSample", currentSample);
+        Graphics.Blit(target, destination, addMaterial);
+        currentSample++;
     }
     
     private void InitRenderTexture()
     {
-        if (target == null || target.width != Screen.width || target.height != Screen.height)
+        int targetWidth = (int)(Screen.width * rescaleFactor);
+        int targetHeighth = (int)(Screen.height * rescaleFactor);
+        
+        if (target == null || 
+            target.width != targetWidth || 
+            target.height != targetHeighth)
         {
             if (target != null)
                 target.Release();
             
-            target = new RenderTexture(Screen.width, Screen.height, 0,
+            target = new RenderTexture(targetWidth, 
+                targetHeighth, 0,
                 RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+            target.filterMode = FilterMode.Point;
             target.enableRandomWrite = true;
             target.Create();
         }
@@ -64,14 +100,14 @@ public class RayTracingManager : MonoBehaviour
     void SendParams()
     {
         Camera cam = Camera.current;
-        float clipPlaneHeight = cam.nearClipPlane * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
-        float clipPlaneWidth = clipPlaneHeight * cam.aspect;
         
         rayTracingShader.SetMatrix("_CameraToWorld", cam.cameraToWorldMatrix);
         rayTracingShader.SetMatrix("_CameraInverseProjection", cam.projectionMatrix.inverse);
         rayTracingShader.SetInt("_FrameCount", Time.frameCount);
         rayTracingShader.SetInt("_MaxBounces", maxBounces);
         rayTracingShader.SetInt("_Samples", samples);
+        rayTracingShader.SetFloat("_RescaleFactor", rescaleFactor);
+        rayTracingShader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
         
         SetBuffer("_meshes", _meshObjectBuffer);
         SetBuffer("_vertices", _vertexBuffer);
@@ -83,7 +119,7 @@ public class RayTracingManager : MonoBehaviour
     private static List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
     public static void RegisterObject(RayTracingObject obj)
     {
-        obj.index = _rayTracingObjects.Count;
+        //obj.index = _rayTracingObjects.Count;
         _rayTracingObjects.Add(obj);
         _meshObjectsNeedRebuilding = true;
     }
@@ -131,6 +167,7 @@ public class RayTracingManager : MonoBehaviour
         foreach (RayTracingObject obj in _rayTracingObjects)
         {
             Mesh mesh = obj.GetComponent<MeshFilter>().sharedMesh;
+            if(mesh == null) continue;
 
             int firstVertex = _vertices.Count;
             _vertices.AddRange(mesh.vertices);
