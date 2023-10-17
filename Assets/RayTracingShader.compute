@@ -166,6 +166,7 @@ HitInfo RayTriangle(Ray ray, Triangle tri)
         hitInfo.didHit = true;
         hitInfo.hitPoint = ray.origin + ray.direction * dst;
         hitInfo.distance = dst;
+        //hitInfo.normal = tri.p1 + tri.p2 + tri.p3;
         hitInfo.normal = normalize(cross(tri.p2 - tri.p1, tri.p3 - tri.p1));
     }
     return hitInfo;
@@ -253,7 +254,7 @@ HitInfo RayAll(Ray ray)
     return closestHit;
 }
 
-float3 Trace(Ray ray, inout uint rngState)
+float3 Trace(Ray ray, out float3 normal, inout uint rngState)
 {
     float3 incomingLight = 0;
     float3 rayColor = 1;
@@ -262,13 +263,16 @@ float3 Trace(Ray ray, inout uint rngState)
     {
         HitInfo hit = RayAll(ray);
 
+        if(i == 0) normal = hit.normal; 
+
         if(hit.didHit)
         {
+            float decreaseByAngle = abs(dot(hit.normal, normal));
             float3 direction = normalize(hit.normal + RandomDirection(rngState));
         
             ray.origin = hit.hitPoint;
             ray.direction = direction;
-            incomingLight += hit.emission.rgb * rayColor;
+            incomingLight += hit.emission.rgb * rayColor * decreaseByAngle;
             rayColor = rayColor * hit.diffuse.rgb;
         }
         else break;
@@ -277,7 +281,7 @@ float3 Trace(Ray ray, inout uint rngState)
     return incomingLight;
 }
 
-[numthreads(8,8,1)]
+[numthreads(16,9,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
@@ -293,11 +297,14 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     Ray ray = CameraRay(uv);
 
     float3 totalIncomingLight = 0;
+    float3 normal;
     for(uint rayIndex = 0; rayIndex < _Samples; rayIndex++)
     {
-        totalIncomingLight += Trace(ray, rngState);
+        totalIncomingLight += Trace(ray, normal, rngState);
     }
     
-    Result[id.xy] = float4(totalIncomingLight / _Samples, 1);
-    //Result[id.xy] = float4(RayAll(ray).hitPoint, 1);
+    float4 output = float4(totalIncomingLight / _Samples, 1);
+    
+    Result[id.xy] = output;
+    //Result[id.xy] = float4(normal, 1);
 }

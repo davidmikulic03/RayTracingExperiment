@@ -9,6 +9,7 @@ using UnityEngine.Serialization;
 public class RayTracingManager : MonoBehaviour
 {
     [SerializeField] ComputeShader rayTracingShader;
+    [SerializeField] private Vector2Int baseResolution = new Vector2Int(1920, 1080);
     [Range(0.000001f, 1f)]
     [SerializeField] private float rescaleFactor;
     private RenderTexture target;
@@ -17,6 +18,7 @@ public class RayTracingManager : MonoBehaviour
     private uint currentSample = 0;
     private Material addMaterial;
     [SerializeField] bool useShaderInSceneView;
+    [SerializeField] private bool refine;
     
     private static List<MeshObject> _meshes = new List<MeshObject>();
     private static List<Vector3> _vertices = new List<Vector3>();
@@ -65,21 +67,25 @@ public class RayTracingManager : MonoBehaviour
         uint kernelX, kernelY, kernelZ;
         rayTracingShader.GetKernelThreadGroupSizes(0, out kernelX, out kernelY, out kernelZ);
         
-        int threadGroupsX = Mathf.CeilToInt(Screen.width / (float)kernelX);
-        int threadGroupsY = Mathf.CeilToInt(Screen.height / (float)kernelY);
+        int threadGroupsX = Mathf.CeilToInt(target.width / (float)kernelX);
+        int threadGroupsY = Mathf.CeilToInt(target.height / (float)kernelY);
         rayTracingShader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
-        
-        if (addMaterial == null)
-            addMaterial = new Material(Shader.Find("Hidden/AddShader"));
-        addMaterial.SetFloat("_CurrentSample", currentSample);
-        Graphics.Blit(target, destination, addMaterial);
-        currentSample++;
+
+        if (refine)
+        {
+            if (addMaterial == null)
+                addMaterial = new Material(Shader.Find("Hidden/AddShader"));
+            addMaterial.SetFloat("_CurrentSample", currentSample);
+            Graphics.Blit(target, destination, addMaterial);
+            currentSample++;
+        }
+        else Graphics.Blit(target, destination);
     }
     
     private void InitRenderTexture()
     {
-        int targetWidth = (int)(Screen.width * rescaleFactor);
-        int targetHeighth = (int)(Screen.height * rescaleFactor);
+        int targetWidth = (int)(baseResolution.x * rescaleFactor);
+        int targetHeighth = (int)(baseResolution.y * rescaleFactor);
         
         if (target == null || 
             target.width != targetWidth || 
@@ -107,7 +113,9 @@ public class RayTracingManager : MonoBehaviour
         rayTracingShader.SetInt("_MaxBounces", maxBounces);
         rayTracingShader.SetInt("_Samples", samples);
         rayTracingShader.SetFloat("_RescaleFactor", rescaleFactor);
-        rayTracingShader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
+
+        Vector2 pixelOffset = refine ? new Vector2(Random.value, Random.value) : new Vector2(0.5f, 0.5f);
+        rayTracingShader.SetVector("_PixelOffset", pixelOffset);
         
         SetBuffer("_meshes", _meshObjectBuffer);
         SetBuffer("_vertices", _vertexBuffer);
